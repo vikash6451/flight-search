@@ -1,18 +1,32 @@
 # Setup
 
-This skill pack includes a base helper script at:
+This skill pack includes three concrete integration layers:
 
-- `scripts/flight_search_base.py`
+- packaged helper module at `base/api.py`
+- package exports at `base/__init__.py`
+- CLI wrapper at `scripts/flight_search_base.py`
+- example runner at `examples/example_runner.py`
 
 ## What the helper gives you
 
-It defines:
+The packaged module exposes:
 
 - `FlightSearchParams`
 - `search_flights_with_filters(...)`
 - `search_and_format(...)`
 - `params_from_dict(...)`
-- a small CLI entrypoint
+- `build_departure_window(...)`
+- `parse_time(...)`
+
+The CLI wrapper gives you a small executable entrypoint.
+
+## Install dependencies
+
+At minimum install the Python dependency from the repo root:
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 ## Dependency expectation
 
@@ -35,12 +49,11 @@ So the host project must already have the patched `fast_flights` implementation 
 ## Typical integration pattern
 
 1. Copy this skill folder into your Claude/Codex skills directory.
-2. Copy `scripts/flight_search_base.py` into your project if you want a concrete wrapper/API file.
-3. Make sure the environment has the required `fast_flights` package or source tree.
-4. Call:
+2. Install `requirements.txt` or ensure `fast-flights` is already available.
+3. Import from the packaged module:
 
 ```python
-from flight_search_base import FlightSearchParams, search_and_format
+from base import FlightSearchParams, search_and_format
 
 params = FlightSearchParams(
     origin="BLR",

@@ -7,8 +7,11 @@ description: Search Google Flights through the fast_flights wrapper with user-fr
 
 Use this skill when you need to look up flights with readable output instead of raw Google Flights payloads.
 
-This skill now ships with a concrete helper script/API wrapper:
-- `scripts/flight_search_base.py`
+This skill now ships with a concrete packaged helper module/API wrapper:
+- `base/api.py`
+- `base/__init__.py`
+- CLI wrapper at `scripts/flight_search_base.py`
+- runnable example at `examples/example_runner.py`
 - setup notes in `references/setup.md`
 
 The skill assumes the host environment exposes or installs:

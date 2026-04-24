@@ -7,14 +7,23 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 - aircraft-family filters
 - time-window filters
 - date-window search examples
-- an included base helper script/API wrapper
+- an included packaged base module/API wrapper
+- a runnable CLI script
+- an example runner
+- a minimal `requirements.txt`
 
 ## Layout
 
 ```text
+requirements.txt
 skills/
   flight-search/
     SKILL.md
+    base/
+      __init__.py
+      api.py
+    examples/
+      example_runner.py
     references/
       setup.md
     scripts/
@@ -50,6 +59,9 @@ The skill teaches how to use:
 - `SearchRequest`
 - `search_flights(...)`
 - `search_date_window(...)`
+- the packaged helper API under `skills/flight-search/base/`
+- the CLI wrapper at `skills/flight-search/scripts/flight_search_base.py`
+- the runnable example at `skills/flight-search/examples/example_runner.py`
 
 It includes examples such as:
 

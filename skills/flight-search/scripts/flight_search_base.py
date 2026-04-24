@@ -1,105 +1,14 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import time
-from typing import Any
+import sys
+from pathlib import Path
 
-from fast_flights import (
-    FlightQuery,
-    Passengers,
-    SearchRequest,
-    TimeWindow,
-    create_query,
-    format_itineraries,
-    search_flights,
-)
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+if str(SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(SKILL_ROOT))
 
-
-@dataclass
-class FlightSearchParams:
-    origin: str
-    destination: str
-    date: str
-    after: str | time | None = None
-    before: str | time | None = None
-    max_price: int | None = None
-    aircraft: str | None = None
-    max_results: int | None = 5
-    seat: str = "economy"
-    trip: str = "one-way"
-    adults: int = 1
-    language: str = ""
-    currency: str = ""
-    sort: str = "cheapest"
-    sources: tuple[str, ...] = ("google-flights",)
-
-
-def search_flights_with_filters(params: FlightSearchParams):
-    query = create_query(
-        flights=[
-            FlightQuery(
-                date=params.date,
-                from_airport=params.origin,
-                to_airport=params.destination,
-            )
-        ],
-        seat=params.seat,
-        trip=params.trip,
-        passengers=Passengers(adults=params.adults),
-        language=params.language,
-        currency=params.currency,
-    )
-    request = SearchRequest(
-        query=query,
-        sources=tuple(params.sources),
-        sort=params.sort,
-        departure_window=build_departure_window(params.after, params.before),
-        max_results=params.max_results,
-        max_price=params.max_price,
-        aircraft_query=params.aircraft,
-    )
-    return search_flights(request)
-
-
-def search_and_format(params: FlightSearchParams) -> str:
-    response = search_flights_with_filters(params)
-    return format_itineraries(response.results)
-
-
-def build_departure_window(after: str | time | None, before: str | time | None) -> TimeWindow | None:
-    if after is None and before is None:
-        return None
-    start = parse_time(after) if after is not None else time(0, 0)
-    end = parse_time(before) if before is not None else time(23, 59)
-    return TimeWindow(start=start, end=end)
-
-
-def parse_time(value: str | time) -> time:
-    if isinstance(value, time):
-        return value
-    hour_str, minute_str = value.strip().split(":", 1)
-    return time(int(hour_str), int(minute_str))
-
-
-def params_from_dict(data: dict[str, Any]) -> FlightSearchParams:
-    return FlightSearchParams(
-        origin=data["origin"],
-        destination=data["destination"],
-        date=data["date"],
-        after=data.get("after"),
-        before=data.get("before"),
-        max_price=data.get("max_price"),
-        aircraft=data.get("aircraft"),
-        max_results=data.get("max_results", 5),
-        seat=data.get("seat", "economy"),
-        trip=data.get("trip", "one-way"),
-        adults=data.get("adults", 1),
-        language=data.get("language", ""),
-        currency=data.get("currency", ""),
-        sort=data.get("sort", "cheapest"),
-        sources=tuple(data.get("sources", ("google-flights",))),
-    )
+from base import FlightSearchParams, search_and_format
 
 
 def main() -> None:
