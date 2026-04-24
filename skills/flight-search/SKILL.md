@@ -7,7 +7,11 @@ description: Search Google Flights through the fast_flights wrapper with user-fr
 
 Use this skill when you need to look up flights with readable output instead of raw Google Flights payloads.
 
-This skill assumes the repo exposes:
+This skill now ships with a concrete helper script/API wrapper:
+- `scripts/flight_search_base.py`
+- setup notes in `references/setup.md`
+
+The skill assumes the host environment exposes or installs:
 - `find_flights(...)`
 - `format_itineraries(...)`
 - `SearchRequest`
@@ -33,6 +37,9 @@ The formatter is designed to show:
 - terminals when the source provides them
 
 ## Quick start
+
+If you want a concrete file to run or adapt, start from:
+- `scripts/flight_search_base.py`
 
 ```python
 from fast_flights import find_flights, format_itineraries

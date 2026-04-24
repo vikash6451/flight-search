@@ -7,6 +7,7 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 - aircraft-family filters
 - time-window filters
 - date-window search examples
+- an included base helper script/API wrapper
 
 ## Layout
 
@@ -14,6 +15,10 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 skills/
   flight-search/
     SKILL.md
+    references/
+      setup.md
+    scripts/
+      flight_search_base.py
 ```
 
 ## Install
