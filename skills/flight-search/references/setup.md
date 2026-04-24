@@ -58,6 +58,15 @@ from fast_flights import (
 ```
 
 So the host project must make `fast_flights` importable, either through a normal install or through the repo-local `vendor/` path populated by `scripts/install_local_deps.py`.
+The helper then detects which API shape is available and adapts automatically.
+
+## Availability caveat
+
+The published `fast-flights` rc0 package does not export the newer `SearchRequest`/`search_flights` layer.
+This skill's `base/api.py` detects that case and falls back to `create_query(...)` + `get_flights(...)`.
+That keeps the example and CLI working against PyPI installs.
+
+Flight numbers and terminal metadata are not generally exposed by the rc0 package, so those fields may show as `unknown`.
 
 ## Typical integration pattern
 

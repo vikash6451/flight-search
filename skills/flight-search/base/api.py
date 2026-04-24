@@ -1,12 +1,62 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
+from urllib.parse import urlencode
 
 
 _VENDOR_PATH = Path(__file__).resolve().parent.parent / "vendor"
+
+
+@dataclass(frozen=True)
+class TimeWindow:
+    start: time
+    end: time
+
+    def contains(self, value: time) -> bool:
+        if self.start <= self.end:
+            return self.start <= value <= self.end
+        return value >= self.start or value <= self.end
+
+
+@dataclass(frozen=True)
+class NormalizedSegment:
+    origin_code: str
+    origin_name: str
+    destination_code: str
+    destination_name: str
+    departure_at: datetime
+    arrival_at: datetime
+    duration_minutes: int
+    plane_type: str
+    flight_number: str | None = None
+    departure_terminal: str | None = None
+    arrival_terminal: str | None = None
+
+
+@dataclass(frozen=True)
+class NormalizedItinerary:
+    source: str
+    source_label: str
+    price: int
+    currency: str | None
+    airlines: tuple[str, ...]
+    departure_at: datetime
+    arrival_at: datetime
+    duration_minutes: int
+    stop_count: int
+    booking_url: str
+    segments: tuple[NormalizedSegment, ...]
+    raw: Any
+
+
+@dataclass(frozen=True)
+class SearchResponse:
+    results: tuple[NormalizedItinerary, ...]
+    raw: Any
+    mode: str
 
 
 @dataclass
@@ -35,15 +85,7 @@ def _load_fast_flights_api() -> dict[str, Any]:
         sys.path.insert(0, str(_VENDOR_PATH))
 
     try:
-        from fast_flights import (
-            FlightQuery,
-            Passengers,
-            SearchRequest,
-            TimeWindow,
-            create_query,
-            format_itineraries,
-            search_flights,
-        )
+        import fast_flights
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             "fast_flights is not installed. Run `python skills/flight-search/scripts/install_local_deps.py` "
@@ -51,58 +93,30 @@ def _load_fast_flights_api() -> dict[str, Any]:
             "importable in this environment."
         ) from exc
 
-    return {
-        "FlightQuery": FlightQuery,
-        "Passengers": Passengers,
-        "SearchRequest": SearchRequest,
-        "TimeWindow": TimeWindow,
-        "create_query": create_query,
-        "format_itineraries": format_itineraries,
-        "search_flights": search_flights,
-    }
+    exports = {name: getattr(fast_flights, name) for name in dir(fast_flights) if not name.startswith("_")}
+    exports["module"] = fast_flights
+    exports["compat_mode"] = "search_v2" if "SearchRequest" in exports and "search_flights" in exports else "legacy_rc0"
+    return exports
 
 
-def search_flights_with_filters(params: FlightSearchParams):
+def search_flights_with_filters(params: FlightSearchParams) -> SearchResponse:
     api = _load_fast_flights_api()
-    query = api["create_query"](
-        flights=[
-            api["FlightQuery"](
-                date=params.date,
-                from_airport=params.origin,
-                to_airport=params.destination,
-            )
-        ],
-        seat=params.seat,
-        trip=params.trip,
-        passengers=api["Passengers"](adults=params.adults),
-        language=params.language,
-        currency=params.currency,
-    )
-    request = api["SearchRequest"](
-        query=query,
-        sources=tuple(params.sources),
-        sort=params.sort,
-        departure_window=build_departure_window(params.after, params.before),
-        max_results=params.max_results,
-        max_price=params.max_price,
-        aircraft_query=params.aircraft,
-    )
-    return api["search_flights"](request)
+    if api["compat_mode"] == "search_v2":
+        return _search_with_v2_api(api, params)
+    return _search_with_legacy_api(api, params)
 
 
 def search_and_format(params: FlightSearchParams) -> str:
-    api = _load_fast_flights_api()
     response = search_flights_with_filters(params)
-    return api["format_itineraries"](response.results)
+    return format_itineraries(response.results)
 
 
-def build_departure_window(after: str | time | None, before: str | time | None):
+def build_departure_window(after: str | time | None, before: str | time | None) -> TimeWindow | None:
     if after is None and before is None:
         return None
-    api = _load_fast_flights_api()
     start = parse_time(after) if after is not None else time(0, 0)
     end = parse_time(before) if before is not None else time(23, 59)
-    return api["TimeWindow"](start=start, end=end)
+    return TimeWindow(start=start, end=end)
 
 
 def parse_time(value: str | time) -> time:
@@ -130,3 +144,285 @@ def params_from_dict(data: dict[str, Any]) -> FlightSearchParams:
         sort=data.get("sort", "cheapest"),
         sources=tuple(data.get("sources", ("google-flights",))),
     )
+
+
+def format_itineraries(itineraries: Sequence[NormalizedItinerary]) -> str:
+    if not itineraries:
+        return "No matching itineraries."
+
+    blocks: list[str] = []
+    for index, itinerary in enumerate(itineraries, start=1):
+        first_segment = itinerary.segments[0]
+        last_segment = itinerary.segments[-1]
+        price = str(itinerary.price) if itinerary.currency is None else f"{itinerary.price} {itinerary.currency}"
+        lines = [
+            f"{index}. {_airport_label(first_segment.origin_name, first_segment.origin_code)} → {_airport_label(last_segment.destination_name, last_segment.destination_code)}",
+            f"   Price: {price}",
+            f"   Source: {itinerary.source_label}",
+            f"   Stops: {_stop_summary(itinerary)}",
+            f"   Airlines: {', '.join(itinerary.airlines)}",
+            f"   Departure: {_format_trip_datetime(itinerary.departure_at, base_date=itinerary.departure_at.date())}",
+            f"   Arrival: {_format_trip_datetime(itinerary.arrival_at, base_date=itinerary.departure_at.date(), overnight_label=True)}",
+            f"   Duration: {itinerary.duration_minutes}m",
+        ]
+        for seg_index, segment in enumerate(itinerary.segments, start=1):
+            lines.extend(
+                [
+                    f"   Segment {seg_index}: {_airport_label(segment.origin_name, segment.origin_code)} → {_airport_label(segment.destination_name, segment.destination_code)}",
+                    f"      {segment.origin_name}",
+                    f"      {segment.destination_name}",
+                    f"      Flight: {segment.flight_number or 'unknown'}",
+                    f"      Aircraft: {segment.plane_type or 'unknown'}",
+                    *(
+                        [f"      Terminal: {segment.departure_terminal or '?'} → {segment.arrival_terminal or '?'}"]
+                        if segment.departure_terminal or segment.arrival_terminal
+                        else []
+                    ),
+                    f"      Time: {_format_segment_datetime(segment.departure_at)} → {_format_segment_datetime(segment.arrival_at, base_date=segment.departure_at.date())}",
+                    f"      Segment duration: {segment.duration_minutes}m",
+                ]
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _search_with_v2_api(api: dict[str, Any], params: FlightSearchParams) -> SearchResponse:
+    query = api["create_query"](
+        flights=[
+            api["FlightQuery"](
+                date=params.date,
+                from_airport=params.origin,
+                to_airport=params.destination,
+            )
+        ],
+        seat=params.seat,
+        trip=params.trip,
+        passengers=api["Passengers"](adults=params.adults),
+        language=params.language,
+        currency=params.currency,
+    )
+    request = api["SearchRequest"](
+        query=query,
+        sources=tuple(params.sources),
+        sort=params.sort,
+        departure_window=_coerce_v2_time_window(api, build_departure_window(params.after, params.before)),
+        max_results=params.max_results,
+        max_price=params.max_price,
+        aircraft_query=params.aircraft,
+    )
+    raw_response = api["search_flights"](request)
+    return SearchResponse(results=tuple(raw_response.results), raw=raw_response, mode="search_v2")
+
+
+def _search_with_legacy_api(api: dict[str, Any], params: FlightSearchParams) -> SearchResponse:
+    max_stops = None if len(params.sources) == 0 else None
+    query = api["create_query"](
+        flights=[
+            api["FlightQuery"](
+                date=params.date,
+                from_airport=params.origin,
+                to_airport=params.destination,
+            )
+        ],
+        seat=params.seat,
+        trip=params.trip,
+        passengers=api["Passengers"](adults=params.adults),
+        language=params.language,
+        currency=params.currency,
+        max_stops=max_stops,
+    )
+    raw_results = api["get_flights"](query)
+    normalized = [_normalize_legacy_itinerary(item, query=query) for item in raw_results]
+    filtered = _filter_itineraries(
+        normalized,
+        departure_window=build_departure_window(params.after, params.before),
+        max_price=params.max_price,
+        aircraft_query=params.aircraft,
+    )
+    ranked = _rank_itineraries(filtered, mode=params.sort)
+    if params.max_results is not None:
+        ranked = ranked[: params.max_results]
+    return SearchResponse(results=tuple(ranked), raw=raw_results, mode="legacy_rc0")
+
+
+def _coerce_v2_time_window(api: dict[str, Any], window: TimeWindow | None):
+    if window is None:
+        return None
+    return api["TimeWindow"](start=window.start, end=window.end)
+
+
+def _normalize_legacy_itinerary(flight: Any, *, query: Any) -> NormalizedItinerary:
+    segments = tuple(_normalize_legacy_segment(item) for item in flight.flights)
+    departure_at = segments[0].departure_at
+    arrival_at = segments[-1].arrival_at
+    duration_minutes = int((arrival_at - departure_at).total_seconds() // 60)
+    currency = getattr(query, "currency", None) or None
+    return NormalizedItinerary(
+        source="google-flights",
+        source_label="Google Flights",
+        price=int(flight.price),
+        currency=currency,
+        airlines=tuple(flight.airlines),
+        departure_at=departure_at,
+        arrival_at=arrival_at,
+        duration_minutes=duration_minutes,
+        stop_count=max(len(segments) - 1, 0),
+        booking_url=_booking_url_for_query(query),
+        segments=segments,
+        raw=flight,
+    )
+
+
+def _normalize_legacy_segment(segment: Any) -> NormalizedSegment:
+    departure_at = _datetime_from_parts(segment.departure.date, segment.departure.time)
+    arrival_at = _datetime_from_parts(
+        segment.arrival.date,
+        segment.arrival.time,
+        fallback=departure_at + timedelta(minutes=segment.duration),
+    )
+    return NormalizedSegment(
+        origin_code=segment.from_airport.code,
+        origin_name=segment.from_airport.name,
+        destination_code=segment.to_airport.code,
+        destination_name=segment.to_airport.name,
+        departure_at=departure_at,
+        arrival_at=arrival_at,
+        duration_minutes=int(segment.duration),
+        plane_type=getattr(segment, "plane_type", "") or "",
+        flight_number=getattr(segment, "flight_number", None),
+        departure_terminal=_short_terminal(getattr(segment, "departure_terminal", None)),
+        arrival_terminal=_short_terminal(getattr(segment, "arrival_terminal", None)),
+    )
+
+
+def _filter_itineraries(
+    itineraries: Sequence[NormalizedItinerary],
+    *,
+    departure_window: TimeWindow | None,
+    max_price: int | None,
+    aircraft_query: str | None,
+) -> list[NormalizedItinerary]:
+    results = list(itineraries)
+    if departure_window is not None:
+        results = [item for item in results if departure_window.contains(item.departure_at.time())]
+    if max_price is not None:
+        results = [item for item in results if item.price <= max_price]
+    if aircraft_query is not None and aircraft_query.strip():
+        needle = aircraft_query.strip().lower()
+        results = [
+            item
+            for item in results
+            if any(needle in (segment.plane_type or "").lower() for segment in item.segments)
+        ]
+    return results
+
+
+def _rank_itineraries(itineraries: Sequence[NormalizedItinerary], *, mode: str) -> list[NormalizedItinerary]:
+    if mode == "cheapest":
+        key = lambda item: (item.price, item.duration_minutes, item.departure_at)
+    elif mode == "fastest":
+        key = lambda item: (item.duration_minutes, item.price, item.departure_at)
+    elif mode == "balanced":
+        key = lambda item: (
+            item.price + item.duration_minutes + (item.stop_count * 90),
+            item.price,
+            item.duration_minutes,
+            item.departure_at,
+        )
+    else:
+        raise ValueError(f"unknown sort mode: {mode}")
+    return sorted(itineraries, key=key)
+
+
+def _booking_url_for_query(query: Any) -> str:
+    if hasattr(query, "url"):
+        return query.url()
+    return "https://www.google.com/travel/flights?" + urlencode({"q": str(query)})
+
+
+def _datetime_from_parts(
+    date_parts: tuple[int, int, int],
+    time_parts: Sequence[int | None],
+    *,
+    fallback: datetime | None = None,
+) -> datetime:
+    if len(time_parts) >= 2:
+        hour, minute = time_parts[0], time_parts[1]
+    elif len(time_parts) == 1:
+        hour, minute = time_parts[0], 0
+    else:
+        hour, minute = None, None
+    if hour is None or minute is None:
+        if fallback is None:
+            raise ValueError(f"incomplete time parts without fallback: {time_parts!r}")
+        return fallback
+    return datetime(
+        year=date_parts[0],
+        month=date_parts[1],
+        day=date_parts[2],
+        hour=hour,
+        minute=minute,
+    )
+
+
+def _stop_label(stop_count: int) -> str:
+    if stop_count <= 0:
+        return "non-stop"
+    if stop_count == 1:
+        return "1 stop"
+    return f"{stop_count} stops"
+
+
+def _stop_summary(itinerary: NormalizedItinerary) -> str:
+    base = _stop_label(itinerary.stop_count)
+    if itinerary.stop_count <= 0:
+        return base
+    stopovers = [
+        _airport_label(segment.destination_name, segment.destination_code)
+        for segment in itinerary.segments[:-1]
+    ]
+    return base if not stopovers else f"{base} via {', '.join(stopovers)}"
+
+
+def _airport_label(name: str, code: str) -> str:
+    city = _airport_city(name)
+    return f"{city} ({code})" if city else code
+
+
+def _airport_city(name: str) -> str | None:
+    stripped = name.strip()
+    if not stripped:
+        return None
+    marker = "Airport "
+    if marker in stripped:
+        suffix = stripped.split(marker)[-1].strip()
+        if suffix:
+            return suffix
+    words = stripped.split()
+    return words[-1] if words else None
+
+
+def _format_trip_datetime(value: datetime, *, base_date: date, overnight_label: bool = False) -> str:
+    rendered = value.strftime("%Y-%m-%d %H:%M")
+    if overnight_label and value.date() > base_date:
+        return f"{rendered} (overnight)"
+    return rendered
+
+
+def _format_segment_datetime(value: datetime, *, base_date: date | None = None) -> str:
+    if base_date is not None and value.date() == base_date:
+        return value.strftime("%H:%M")
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _short_terminal(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    lower = stripped.lower()
+    if lower.startswith("terminal "):
+        suffix = stripped.split(" ", 1)[1].strip()
+        return f"T{suffix}" if suffix else None
+    return stripped

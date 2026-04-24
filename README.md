@@ -12,6 +12,7 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 - an example runner
 - a minimal `requirements.txt`
 - a repo-local dependency bootstrap for locked-down boxes
+- compatibility with the published `fast-flights` package API
 
 ## Layout
 
@@ -55,6 +56,18 @@ mkdir -p ~/.codex/skills
 cp -R skills/flight-search ~/.codex/skills/
 ```
 
+## Dependency/API compatibility
+
+The published `fast-flights` package on PyPI currently exposes the older rc0 API surface.
+That means symbols like `SearchRequest`, `search_flights`, and `format_itineraries` may be missing even though newer source checkouts include them.
+
+This skill pack handles both shapes:
+
+- newer source/API → uses the richer search API directly
+- published rc0 package → falls back to `create_query(...)` + `get_flights(...)` and normalizes results locally
+
+On the rc0 package, airport names, aircraft type, prices, and stop counts are available, but flight numbers and terminal metadata are usually not exported, so those render as `unknown` instead of failing.
+
 ## Dependency install without system pip/venv
 
 If the host blocks system-wide installs or lacks `python3-venv`, install dependencies into the repo-local vendor folder instead:
@@ -70,15 +83,11 @@ The helper module/CLI automatically imports from there.
 
 The skill teaches how to use:
 
-- `find_flights(...)`
-- `format_itineraries(...)`
-- `SearchRequest`
-- `search_flights(...)`
-- `search_date_window(...)`
 - the packaged helper API under `skills/flight-search/base/`
 - the skill-local dependency file at `skills/flight-search/requirements.txt`
 - the CLI wrapper at `skills/flight-search/scripts/flight_search_base.py`
 - the runnable example at `skills/flight-search/examples/example_runner.py`
+- compatibility fallback from published `fast-flights` rc0 to the newer source API shape
 
 It includes examples such as:
 

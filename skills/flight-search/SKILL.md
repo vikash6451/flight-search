@@ -16,12 +16,14 @@ This skill now ships with a concrete packaged helper module/API wrapper:
 - runnable example at `examples/example_runner.py`
 - setup notes in `references/setup.md`
 
-The skill assumes the host environment exposes or installs:
-- `find_flights(...)`
-- `format_itineraries(...)`
-- `SearchRequest`
-- `search_flights(...)`
-- `search_date_window(...)`
+The helper is compatibility-aware:
+- if `fast_flights` exposes the newer search API, it uses that directly
+- if the host only has the published rc0 package, it falls back to `create_query(...)` + `get_flights(...)` and normalizes results locally
+
+The helper needs `fast_flights` to be importable, but it does not require the newest API surface.
+It works with either:
+- newer source trees that expose `SearchRequest`, `search_flights`, and `format_itineraries`
+- the published rc0 package that only exposes `create_query(...)` and `get_flights(...)`
 
 ## What this skill is for
 
@@ -31,7 +33,7 @@ Use it for queries like:
 - "Only show flights below 8k"
 - "Show me the best evening options with clean formatting"
 
-The formatter is designed to show:
+The formatter is designed to show when available:
 - city + airport code
 - airline
 - flight number
@@ -40,6 +42,8 @@ The formatter is designed to show:
 - overnight arrivals
 - segment-level details
 - terminals when the source provides them
+
+With the published `fast-flights` rc0 package, aircraft type and airport names are available, but flight numbers and terminal metadata are usually not exported, so those fields will render as `unknown` rather than crashing.
 
 ## Quick start
 
