@@ -11,6 +11,7 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 - a runnable CLI script
 - an example runner
 - a minimal `requirements.txt`
+- a repo-local dependency bootstrap for locked-down boxes
 
 ## Layout
 
@@ -19,6 +20,7 @@ requirements.txt
 skills/
   flight-search/
     SKILL.md
+    requirements.txt
     base/
       __init__.py
       api.py
@@ -28,6 +30,9 @@ skills/
       setup.md
     scripts/
       flight_search_base.py
+      install_local_deps.py
+    vendor/
+      # created locally by install_local_deps.py
 ```
 
 ## Install
@@ -50,6 +55,17 @@ mkdir -p ~/.codex/skills
 cp -R skills/flight-search ~/.codex/skills/
 ```
 
+## Dependency install without system pip/venv
+
+If the host blocks system-wide installs or lacks `python3-venv`, install dependencies into the repo-local vendor folder instead:
+
+```bash
+python skills/flight-search/scripts/install_local_deps.py
+```
+
+That installer prefers `skills/flight-search/requirements.txt`, falls back to the repo root `requirements.txt`, and installs into `skills/flight-search/vendor/`.
+The helper module/CLI automatically imports from there.
+
 ## Contents
 
 The skill teaches how to use:
@@ -60,6 +76,7 @@ The skill teaches how to use:
 - `search_flights(...)`
 - `search_date_window(...)`
 - the packaged helper API under `skills/flight-search/base/`
+- the skill-local dependency file at `skills/flight-search/requirements.txt`
 - the CLI wrapper at `skills/flight-search/scripts/flight_search_base.py`
 - the runnable example at `skills/flight-search/examples/example_runner.py`
 

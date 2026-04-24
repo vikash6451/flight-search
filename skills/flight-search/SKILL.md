@@ -10,7 +10,9 @@ Use this skill when you need to look up flights with readable output instead of 
 This skill now ships with a concrete packaged helper module/API wrapper:
 - `base/api.py`
 - `base/__init__.py`
+- `requirements.txt`
 - CLI wrapper at `scripts/flight_search_base.py`
+- local dependency bootstrap at `scripts/install_local_deps.py`
 - runnable example at `examples/example_runner.py`
 - setup notes in `references/setup.md`
 
@@ -43,20 +45,27 @@ The formatter is designed to show:
 
 If you want a concrete file to run or adapt, start from:
 - `scripts/flight_search_base.py`
+- `scripts/install_local_deps.py`
+
+If `fast_flights` is not already importable on the host, bootstrap repo-local dependencies first:
+
+```bash
+python skills/flight-search/scripts/install_local_deps.py
+```
 
 ```python
-from fast_flights import find_flights, format_itineraries
+from base import FlightSearchParams, search_and_format
 
-response = find_flights(
-    "BLR",
-    "BOM",
+params = FlightSearchParams(
+    origin="BLR",
+    destination="BOM",
     date="2026-04-25",
     after="16:00",
     currency="INR",
     max_results=5,
 )
 
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ## Main helper

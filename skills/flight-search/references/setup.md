@@ -1,10 +1,11 @@
 # Setup
 
-This skill pack includes three concrete integration layers:
+This skill pack includes three concrete integration layers plus a local dependency bootstrap:
 
 - packaged helper module at `base/api.py`
 - package exports at `base/__init__.py`
 - CLI wrapper at `scripts/flight_search_base.py`
+- repo-local installer at `scripts/install_local_deps.py`
 - example runner at `examples/example_runner.py`
 
 ## What the helper gives you
@@ -22,11 +23,23 @@ The CLI wrapper gives you a small executable entrypoint.
 
 ## Install dependencies
 
-At minimum install the Python dependency from the repo root:
+If ordinary `pip install -r requirements.txt` works in your environment, use that.
+You can use either the repo root file or the skill-local file:
 
 ```bash
 python -m pip install -r requirements.txt
+# or
+python -m pip install -r skills/flight-search/requirements.txt
 ```
+
+If the host blocks system-wide installs or lacks `python3-venv`, use the repo-local installer instead:
+
+```bash
+python skills/flight-search/scripts/install_local_deps.py
+```
+
+That installer prefers `skills/flight-search/requirements.txt`, falls back to the repo root `requirements.txt`, and installs dependencies under `skills/flight-search/vendor/`.
+The helper module/CLI automatically imports from there.
 
 ## Dependency expectation
 
@@ -44,12 +57,12 @@ from fast_flights import (
 )
 ```
 
-So the host project must already have the patched `fast_flights` implementation available.
+So the host project must make `fast_flights` importable, either through a normal install or through the repo-local `vendor/` path populated by `scripts/install_local_deps.py`.
 
 ## Typical integration pattern
 
 1. Copy this skill folder into your Claude/Codex skills directory.
-2. Install `requirements.txt` or ensure `fast-flights` is already available.
+2. Make `fast-flights` importable, either with `python -m pip install -r requirements.txt` or with `python skills/flight-search/scripts/install_local_deps.py`.
 3. Import from the packaged module:
 
 ```python

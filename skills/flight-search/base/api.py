@@ -2,17 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import time
+from pathlib import Path
 from typing import Any
 
-from fast_flights import (
-    FlightQuery,
-    Passengers,
-    SearchRequest,
-    TimeWindow,
-    create_query,
-    format_itineraries,
-    search_flights,
-)
+
+_VENDOR_PATH = Path(__file__).resolve().parent.parent / "vendor"
 
 
 @dataclass
@@ -34,10 +28,45 @@ class FlightSearchParams:
     sources: tuple[str, ...] = ("google-flights",)
 
 
+def _load_fast_flights_api() -> dict[str, Any]:
+    import sys
+
+    if _VENDOR_PATH.exists() and str(_VENDOR_PATH) not in sys.path:
+        sys.path.insert(0, str(_VENDOR_PATH))
+
+    try:
+        from fast_flights import (
+            FlightQuery,
+            Passengers,
+            SearchRequest,
+            TimeWindow,
+            create_query,
+            format_itineraries,
+            search_flights,
+        )
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "fast_flights is not installed. Run `python skills/flight-search/scripts/install_local_deps.py` "
+            "to install dependencies into the repo-local vendor directory, or otherwise make fast-flights "
+            "importable in this environment."
+        ) from exc
+
+    return {
+        "FlightQuery": FlightQuery,
+        "Passengers": Passengers,
+        "SearchRequest": SearchRequest,
+        "TimeWindow": TimeWindow,
+        "create_query": create_query,
+        "format_itineraries": format_itineraries,
+        "search_flights": search_flights,
+    }
+
+
 def search_flights_with_filters(params: FlightSearchParams):
-    query = create_query(
+    api = _load_fast_flights_api()
+    query = api["create_query"](
         flights=[
-            FlightQuery(
+            api["FlightQuery"](
                 date=params.date,
                 from_airport=params.origin,
                 to_airport=params.destination,
@@ -45,11 +74,11 @@ def search_flights_with_filters(params: FlightSearchParams):
         ],
         seat=params.seat,
         trip=params.trip,
-        passengers=Passengers(adults=params.adults),
+        passengers=api["Passengers"](adults=params.adults),
         language=params.language,
         currency=params.currency,
     )
-    request = SearchRequest(
+    request = api["SearchRequest"](
         query=query,
         sources=tuple(params.sources),
         sort=params.sort,
@@ -58,20 +87,22 @@ def search_flights_with_filters(params: FlightSearchParams):
         max_price=params.max_price,
         aircraft_query=params.aircraft,
     )
-    return search_flights(request)
+    return api["search_flights"](request)
 
 
 def search_and_format(params: FlightSearchParams) -> str:
+    api = _load_fast_flights_api()
     response = search_flights_with_filters(params)
-    return format_itineraries(response.results)
+    return api["format_itineraries"](response.results)
 
 
-def build_departure_window(after: str | time | None, before: str | time | None) -> TimeWindow | None:
+def build_departure_window(after: str | time | None, before: str | time | None):
     if after is None and before is None:
         return None
+    api = _load_fast_flights_api()
     start = parse_time(after) if after is not None else time(0, 0)
     end = parse_time(before) if before is not None else time(23, 59)
-    return TimeWindow(start=start, end=end)
+    return api["TimeWindow"](start=start, end=end)
 
 
 def parse_time(value: str | time) -> time:
