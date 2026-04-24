@@ -19,6 +19,7 @@ This skill now ships with a concrete packaged helper module/API wrapper:
 The helper is compatibility-aware:
 - if `fast_flights` exposes the newer search API, it uses that directly
 - if the host only has the published rc0 package, it falls back to `create_query(...)` + `get_flights(...)` and normalizes results locally
+- if the rc0 parser fails to find the `ds:1` script, it retries with a defensive HTML/script scan and raises a clearer error if the page payload is genuinely missing
 
 The helper needs `fast_flights` to be importable, but it does not require the newest API surface.
 It works with either:

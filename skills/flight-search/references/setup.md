@@ -64,7 +64,8 @@ The helper then detects which API shape is available and adapts automatically.
 
 The published `fast-flights` rc0 package does not export the newer `SearchRequest`/`search_flights` layer.
 This skill's `base/api.py` detects that case and falls back to `create_query(...)` + `get_flights(...)`.
-That keeps the example and CLI working against PyPI installs.
+If the rc0 parser hits the known `NoneType.text` failure while looking for the `ds:1` script, the helper retries with its own defensive HTML/script extraction path.
+That keeps the example and CLI working against PyPI installs in the common failure mode.
 
 Flight numbers and terminal metadata are not generally exposed by the rc0 package, so those fields may show as `unknown`.
 

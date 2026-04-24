@@ -65,6 +65,7 @@ This skill pack handles both shapes:
 
 - newer source/API → uses the richer search API directly
 - published rc0 package → falls back to `create_query(...)` + `get_flights(...)` and normalizes results locally
+- if the rc0 parser hits the known missing-`ds:1` script bug, the helper retries with its own defensive HTML/script extraction path
 
 On the rc0 package, airport names, aircraft type, prices, and stop counts are available, but flight numbers and terminal metadata are usually not exported, so those render as `unknown` instead of failing.
 

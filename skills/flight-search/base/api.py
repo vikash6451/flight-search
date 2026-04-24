@@ -215,7 +215,6 @@ def _search_with_v2_api(api: dict[str, Any], params: FlightSearchParams) -> Sear
 
 
 def _search_with_legacy_api(api: dict[str, Any], params: FlightSearchParams) -> SearchResponse:
-    max_stops = None if len(params.sources) == 0 else None
     query = api["create_query"](
         flights=[
             api["FlightQuery"](
@@ -229,9 +228,9 @@ def _search_with_legacy_api(api: dict[str, Any], params: FlightSearchParams) -> 
         passengers=api["Passengers"](adults=params.adults),
         language=params.language,
         currency=params.currency,
-        max_stops=max_stops,
+        max_stops=None,
     )
-    raw_results = api["get_flights"](query)
+    raw_results = _get_legacy_flights(api, query)
     normalized = [_normalize_legacy_itinerary(item, query=query) for item in raw_results]
     filtered = _filter_itineraries(
         normalized,
@@ -249,6 +248,45 @@ def _coerce_v2_time_window(api: dict[str, Any], window: TimeWindow | None):
     if window is None:
         return None
     return api["TimeWindow"](start=window.start, end=window.end)
+
+
+def _get_legacy_flights(api: dict[str, Any], query: Any):
+    try:
+        return api["get_flights"](query)
+    except AttributeError as exc:
+        message = str(exc)
+        if "'NoneType' object has no attribute 'text'" not in message:
+            raise
+        return _parse_legacy_results_from_html(api, query)
+
+
+def _parse_legacy_results_from_html(api: dict[str, Any], query: Any):
+    from selectolax.lexbor import LexborHTMLParser
+
+    fetch_html = getattr(api["module"].fetcher, "fetch_flights_html")
+    parse_js = getattr(api["module"].parser, "parse_js")
+
+    html = fetch_html(query)
+    parser = LexborHTMLParser(html)
+
+    script = parser.css_first("script.ds\\:1")
+    if script is None:
+        for candidate in parser.css("script"):
+            text = candidate.text() or ""
+            if "AF_initDataCallback" in text and "key: 'ds:1'" in text:
+                script = candidate
+                break
+
+    if script is None:
+        title = parser.css_first("title")
+        title_text = title.text(strip=True) if title is not None else "(no title)"
+        html_prefix = html[:500].replace("\n", " ").strip()
+        raise RuntimeError(
+            "Google Flights response did not contain the expected ds:1 data script. "
+            f"Page title: {title_text}. HTML prefix: {html_prefix}"
+        )
+
+    return parse_js(script.text())
 
 
 def _normalize_legacy_itinerary(flight: Any, *, query: Any) -> NormalizedItinerary:
