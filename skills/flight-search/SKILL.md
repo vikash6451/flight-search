@@ -1,6 +1,6 @@
 ---
 name: flight-search
-description: Search Google Flights through the fast_flights wrapper with user-friendly formatting and practical filters like time window, max price, and aircraft family.
+description: Search Google Flights through the fast_flights wrapper with user-friendly formatting, practical filters, and LetsFG fallback/enrichment for broader OTA/meta coverage.
 ---
 
 # Flight Search
@@ -20,8 +20,10 @@ The helper is compatibility-aware:
 - if `fast_flights` exposes the newer search API, it uses that directly
 - if the host only has the published rc0 package, it falls back to `create_query(...)` + `get_flights(...)` and normalizes results locally
 - if the rc0 parser fails to find the `ds:1` script, it retries with a defensive HTML/script scan and raises a clearer error if the page payload is genuinely missing
+- if the rc0 Google parser hits a malformed fare row, it defensively skips that bad row instead of crashing the whole search
+- if Google Flights fails or returns fewer than `max_results`, it can enrich from LetsFG search-only results via `letsfg search --mode fast`
 
-The helper needs `fast_flights` to be importable, but it does not require the newest API surface.
+The helper needs `fast_flights` to be importable, but it does not require the newest API surface. LetsFG fallback/enrichment needs the `letsfg` CLI importable on `PATH` or `LETSFG_COMMAND` set.
 It works with either:
 - newer source trees that expose `SearchRequest`, `search_flights`, and `format_itineraries`
 - the published rc0 package that only exposes `create_query(...)` and `get_flights(...)`
@@ -68,6 +70,8 @@ params = FlightSearchParams(
     after="16:00",
     currency="INR",
     max_results=5,
+    # Default is ("google-flights", "letsfg"): Google first, LetsFG if Google fails/underfills.
+    sources=("google-flights", "letsfg"),
 )
 
 print(search_and_format(params))
@@ -75,12 +79,12 @@ print(search_and_format(params))
 
 ## Main helper
 
-Prefer `find_flights(...)` for most user-facing use cases.
+Prefer `FlightSearchParams(...)` + `search_flights_with_filters(...)` for programmatic use, or `search_and_format(...)` when you want readable text.
 
 ### Supported arguments
 
 ```python
-find_flights(
+FlightSearchParams(
     origin: str,
     destination: str,
     *,
@@ -95,7 +99,7 @@ find_flights(
     adults: int = 1,
     language: str = "",
     currency: str = "",
-    sources: tuple[str, ...] = ("google-flights",),
+    sources: tuple[str, ...] = ("google-flights", "letsfg"),
     sort: str = "cheapest",
 )
 ```
@@ -113,7 +117,7 @@ find_flights(
 ### 1. Evening flights
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     "BLR",
     "BOM",
     date="2026-04-25",
@@ -121,39 +125,39 @@ response = find_flights(
     currency="INR",
     max_results=5,
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ### 2. Only Airbus flights
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     "BLR",
     "BOM",
     date="2026-04-25",
     aircraft="airbus",
     currency="INR",
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ### 3. Only flights below 8k
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     "BLR",
     "BOM",
     date="2026-04-25",
     max_price=8000,
     currency="INR",
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ### 4. Airbus flights below 8k after 4pm
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     "BLR",
     "BOM",
     date="2026-04-25",
@@ -163,13 +167,13 @@ response = find_flights(
     currency="INR",
     max_results=5,
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ### 5. Narrow time window
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     "BLR",
     "BOM",
     date="2026-04-25",
@@ -177,7 +181,7 @@ response = find_flights(
     before="22:00",
     currency="INR",
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ## Example output shape
@@ -254,7 +258,7 @@ window = search_date_window(
 
 ## Practical rules
 
-1. Prefer `find_flights(...)` unless you truly need the lower-level API.
+1. Prefer `FlightSearchParams(...)` + `search_and_format(...)` unless you truly need the lower-level API.
 2. Always set `currency="INR"` or your preferred currency when comparing prices.
 3. Use `after`/`before` for user-facing time filtering.
 4. Use `aircraft="airbus"` or `aircraft="boeing"` instead of exact plane strings unless the user asked for a specific model.
@@ -272,7 +276,7 @@ window = search_date_window(
 For most chat-style tasks, use:
 
 ```python
-response = find_flights(
+params = FlightSearchParams(
     ORIGIN,
     DESTINATION,
     date=DATE,
@@ -282,7 +286,7 @@ response = find_flights(
     currency="INR",
     max_results=5,
 )
-print(format_itineraries(response.results))
+print(search_and_format(params))
 ```
 
 ## When not to use this skill

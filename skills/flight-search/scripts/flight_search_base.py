@@ -27,6 +27,11 @@ def main() -> None:
     parser.add_argument("--language", default="")
     parser.add_argument("--currency", default="")
     parser.add_argument("--sort", default="cheapest")
+    parser.add_argument(
+        "--sources",
+        default="google-flights,letsfg",
+        help="Comma-separated providers: google-flights, letsfg",
+    )
     args = parser.parse_args()
 
     params = FlightSearchParams(
@@ -44,6 +49,7 @@ def main() -> None:
         language=args.language,
         currency=args.currency,
         sort=args.sort,
+        sources=tuple(source.strip() for source in args.sources.split(",") if source.strip()),
     )
     print(search_and_format(params))
 

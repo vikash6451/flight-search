@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 from typing import Any, Sequence
 from urllib.parse import urlencode
 
@@ -57,6 +61,7 @@ class SearchResponse:
     results: tuple[NormalizedItinerary, ...]
     raw: Any
     mode: str
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -75,7 +80,7 @@ class FlightSearchParams:
     language: str = ""
     currency: str = ""
     sort: str = "cheapest"
-    sources: tuple[str, ...] = ("google-flights",)
+    sources: tuple[str, ...] = ("google-flights", "letsfg")
 
 
 def _load_fast_flights_api() -> dict[str, Any]:
@@ -100,6 +105,47 @@ def _load_fast_flights_api() -> dict[str, Any]:
 
 
 def search_flights_with_filters(params: FlightSearchParams) -> SearchResponse:
+    results: list[NormalizedItinerary] = []
+    raw: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    modes: list[str] = []
+
+    if "google-flights" in params.sources:
+        try:
+            google_response = _search_google_provider(params)
+            results.extend(google_response.results)
+            raw["google-flights"] = google_response.raw
+            errors.update(google_response.errors)
+            modes.append(google_response.mode)
+        except Exception as exc:
+            errors["google-flights"] = f"{type(exc).__name__}: {exc}"
+
+    wants_letsfg = "letsfg" in params.sources
+    underfilled = params.max_results is None or len(results) < params.max_results
+    if wants_letsfg and underfilled:
+        try:
+            letsfg_limit = max(params.max_results or 10, 10)
+            letsfg_payload = _run_letsfg_search(params, limit=letsfg_limit)
+            raw["letsfg"] = letsfg_payload
+            results.extend(_normalize_letsfg_results(letsfg_payload, params=params))
+            modes.append("letsfg")
+        except Exception as exc:
+            errors["letsfg"] = f"{type(exc).__name__}: {exc}"
+
+    filtered = _filter_itineraries(
+        _dedupe_itineraries(results),
+        departure_window=build_departure_window(params.after, params.before),
+        max_price=params.max_price,
+        aircraft_query=params.aircraft,
+    )
+    ranked = _rank_itineraries(filtered, mode=params.sort)
+    if params.max_results is not None:
+        ranked = ranked[: params.max_results]
+    mode = "+".join(modes) if modes else "none"
+    return SearchResponse(results=tuple(ranked), raw=raw, mode=mode, errors=errors)
+
+
+def _search_google_provider(params: FlightSearchParams) -> SearchResponse:
     api = _load_fast_flights_api()
     if api["compat_mode"] == "search_v2":
         return _search_with_v2_api(api, params)
@@ -108,7 +154,11 @@ def search_flights_with_filters(params: FlightSearchParams) -> SearchResponse:
 
 def search_and_format(params: FlightSearchParams) -> str:
     response = search_flights_with_filters(params)
-    return format_itineraries(response.results)
+    rendered = format_itineraries(response.results)
+    if response.errors and not response.results:
+        details = "; ".join(f"{source}: {error}" for source, error in response.errors.items())
+        return f"{rendered}\n\nProvider errors: {details}"
+    return rendered
 
 
 def build_departure_window(after: str | time | None, before: str | time | None) -> TimeWindow | None:
@@ -142,7 +192,7 @@ def params_from_dict(data: dict[str, Any]) -> FlightSearchParams:
         language=data.get("language", ""),
         currency=data.get("currency", ""),
         sort=data.get("sort", "cheapest"),
-        sources=tuple(data.get("sources", ("google-flights",))),
+        sources=tuple(data.get("sources", ("google-flights", "letsfg"))),
     )
 
 
@@ -258,9 +308,11 @@ def _get_legacy_flights(api: dict[str, Any], query: Any):
         if "'NoneType' object has no attribute 'text'" not in message:
             raise
         return _parse_legacy_results_from_html(api, query)
+    except IndexError:
+        return _parse_legacy_results_from_html(api, query, defensive=True)
 
 
-def _parse_legacy_results_from_html(api: dict[str, Any], query: Any):
+def _parse_legacy_results_from_html(api: dict[str, Any], query: Any, *, defensive: bool = False):
     from selectolax.lexbor import LexborHTMLParser
 
     fetch_html = getattr(api["module"].fetcher, "fetch_flights_html")
@@ -286,7 +338,77 @@ def _parse_legacy_results_from_html(api: dict[str, Any], query: Any):
             f"Page title: {title_text}. HTML prefix: {html_prefix}"
         )
 
-    return parse_js(script.text())
+    if defensive:
+        return _parse_legacy_js_defensively(api, script.text())
+    try:
+        return parse_js(script.text())
+    except IndexError:
+        return _parse_legacy_js_defensively(api, script.text())
+
+
+def _legacy_price_from_row(price_field: Any) -> int | None:
+    try:
+        price = price_field[0][1]
+    except (IndexError, TypeError):
+        return None
+    return int(price) if price is not None else None
+
+
+def _parse_legacy_js_defensively(api: dict[str, Any], js: str):
+    import rjsonc
+
+    model = api["module"].model
+    parser_module = api["module"].parser
+    meta_list_cls = getattr(parser_module, "MetaList")
+
+    payload = js.split("data:", 1)[1].rsplit(",", 1)[0]
+    data = rjsonc.loads(payload)
+
+    alliances = [model.Alliance(code=code, name=name) for code, name in data[7][1][0]]
+    airlines_meta = [model.Airline(code=code, name=name) for code, name in data[7][1][1]]
+
+    flights = meta_list_cls()
+    for row in data[3][0]:
+        price = _legacy_price_from_row(row[1] if len(row) > 1 else None)
+        if price is None:
+            continue
+        try:
+            flight = row[0]
+            segments = []
+            for single_flight in flight[2]:
+                from_airport = model.Airport(code=single_flight[3], name=single_flight[4])
+                to_airport = model.Airport(code=single_flight[6], name=single_flight[5])
+                departure = model.SimpleDatetime(date=single_flight[20], time=single_flight[8])
+                arrival = model.SimpleDatetime(date=single_flight[21], time=single_flight[10])
+                segments.append(
+                    model.SingleFlight(
+                        from_airport=from_airport,
+                        to_airport=to_airport,
+                        departure=departure,
+                        arrival=arrival,
+                        duration=single_flight[11],
+                        plane_type=single_flight[17],
+                    )
+                )
+            extras = flight[22] if len(flight) > 22 else []
+            carbon_emission = extras[7] if len(extras) > 7 else 0
+            typical_carbon_emission = extras[8] if len(extras) > 8 else 0
+            flights.append(
+                model.Flights(
+                    type=flight[0],
+                    price=price,
+                    airlines=flight[1],
+                    flights=segments,
+                    carbon=model.CarbonEmission(
+                        typical_on_route=typical_carbon_emission,
+                        emission=carbon_emission,
+                    ),
+                )
+            )
+        except (IndexError, TypeError):
+            continue
+    flights.metadata = model.JsMetadata(alliances=alliances, airlines=airlines_meta)
+    return flights
 
 
 def _normalize_legacy_itinerary(flight: Any, *, query: Any) -> NormalizedItinerary:
@@ -330,6 +452,126 @@ def _normalize_legacy_segment(segment: Any) -> NormalizedSegment:
         flight_number=getattr(segment, "flight_number", None),
         departure_terminal=_short_terminal(getattr(segment, "departure_terminal", None)),
         arrival_terminal=_short_terminal(getattr(segment, "arrival_terminal", None)),
+    )
+
+
+def _normalize_letsfg_results(payload: dict[str, Any], *, params: FlightSearchParams) -> tuple[NormalizedItinerary, ...]:
+    offers = payload.get("offers") or []
+    normalized = []
+    for offer in offers:
+        try:
+            normalized.append(_normalize_letsfg_offer(offer, params=params))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tuple(normalized)
+
+
+def _normalize_letsfg_offer(offer: dict[str, Any], *, params: FlightSearchParams) -> NormalizedItinerary:
+    outbound = offer["outbound"]
+    raw_segments = outbound["segments"]
+    segments = tuple(_normalize_letsfg_segment(segment) for segment in raw_segments)
+    departure_at = segments[0].departure_at
+    arrival_at = segments[-1].arrival_at
+    duration_minutes = int((arrival_at - departure_at).total_seconds() // 60)
+    if duration_minutes < 0:
+        duration_minutes = int((outbound.get("total_duration_seconds") or 0) // 60)
+    price = offer.get("price_normalized") or offer.get("price")
+    currency = params.currency or offer.get("currency") or None
+    source = offer.get("source") or "unknown"
+    return NormalizedItinerary(
+        source=f"letsfg:{source}",
+        source_label=f"LetsFG ({source})",
+        price=int(round(float(price))),
+        currency=currency,
+        airlines=tuple(offer.get("airlines") or [segment.flight_number or "unknown" for segment in segments]),
+        departure_at=departure_at,
+        arrival_at=arrival_at,
+        duration_minutes=duration_minutes,
+        stop_count=int(outbound.get("stopovers") if outbound.get("stopovers") is not None else max(len(segments) - 1, 0)),
+        booking_url=offer.get("booking_url") or "",
+        segments=segments,
+        raw=offer,
+    )
+
+
+def _normalize_letsfg_segment(segment: dict[str, Any]) -> NormalizedSegment:
+    departure_at = _parse_letsfg_datetime(segment["departure"])
+    arrival_at = _parse_letsfg_datetime(segment["arrival"])
+    duration_minutes = int((segment.get("duration_seconds") or 0) // 60)
+    if duration_minutes <= 0:
+        duration_minutes = int((arrival_at - departure_at).total_seconds() // 60)
+    return NormalizedSegment(
+        origin_code=segment.get("origin") or "",
+        origin_name=segment.get("origin_city") or f"{segment.get('origin') or ''} Airport",
+        destination_code=segment.get("destination") or "",
+        destination_name=segment.get("destination_city") or f"{segment.get('destination') or ''} Airport",
+        departure_at=departure_at,
+        arrival_at=arrival_at,
+        duration_minutes=duration_minutes,
+        plane_type=segment.get("aircraft") or "",
+        flight_number=segment.get("flight_no") or segment.get("airline"),
+    )
+
+
+def _parse_letsfg_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        return parsed.replace(tzinfo=None)
+    return parsed
+
+
+def _run_letsfg_search(params: FlightSearchParams, *, limit: int) -> dict[str, Any]:
+    command = os.environ.get("LETSFG_COMMAND") or shutil.which("letsfg")
+    if command is None:
+        raise RuntimeError("LetsFG CLI not found. Install with `pip install letsfg` or set LETSFG_COMMAND.")
+
+    args = [
+        command,
+        "search",
+        params.origin,
+        params.destination,
+        params.date,
+        "--mode",
+        "fast",
+        "--max-browsers",
+        os.environ.get("LETSFG_MAX_BROWSERS", "4"),
+        "--limit",
+        str(limit),
+        "--json",
+    ]
+    if params.currency:
+        args.extend(["--currency", params.currency])
+
+    xvfb = shutil.which("xvfb-run")
+    if xvfb is not None and os.environ.get("DISPLAY") is None:
+        args = [xvfb, "-a", *args]
+
+    completed = subprocess.run(args, check=False, text=True, capture_output=True, timeout=240)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(f"LetsFG search failed with exit {completed.returncode}: {detail[:500]}")
+    text = completed.stdout
+    start = text.find("{")
+    if start < 0:
+        raise RuntimeError(f"LetsFG did not return JSON: {text[:500]}")
+    return json.loads(text[start:])
+
+
+def _dedupe_itineraries(itineraries: Sequence[NormalizedItinerary]) -> list[NormalizedItinerary]:
+    best_by_key: dict[tuple[Any, ...], NormalizedItinerary] = {}
+    for item in itineraries:
+        key = _itinerary_dedupe_key(item)
+        existing = best_by_key.get(key)
+        if existing is None or item.price < existing.price:
+            best_by_key[key] = item
+    return list(best_by_key.values())
+
+
+def _itinerary_dedupe_key(item: NormalizedItinerary) -> tuple[Any, ...]:
+    return (
+        tuple((segment.origin_code, segment.destination_code, segment.flight_number) for segment in item.segments),
+        item.departure_at,
+        item.arrival_at,
     )
 
 

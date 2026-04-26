@@ -13,6 +13,7 @@ A Claude/Codex-style skill pack for searching flights through the `fast_flights`
 - a minimal `requirements.txt`
 - a repo-local dependency bootstrap for locked-down boxes
 - compatibility with the published `fast-flights` package API
+- optional LetsFG search-only fallback/enrichment provider
 
 ## Layout
 
@@ -96,3 +97,4 @@ It includes examples such as:
 - only Airbus flights
 - only flights below 8k
 - combined filters like Airbus + below 8k + after 4pm
+- fallback/enrichment from LetsFG meta/OTA/direct-airline connectors when Google Flights fails or underfills
